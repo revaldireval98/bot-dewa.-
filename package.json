@@ -1,0 +1,10 @@
+{
+  "name": "bot-dewa",
+  "version": "1.0.0",
+  "main": "index.js",
+  "dependencies": {
+    "@whiskeysockets/baileys": "*",
+    "pino": "*",
+    "axios": "*"
+  }
+}
