@@ -1,0 +1,203 @@
+const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, downloadContentFromMessage } = require("@whiskeysockets/baileys")
+const pino = require("pino")
+const axios = require("axios")
+const fs = require("fs")
+
+let antiLink = true
+let antiToxic = true
+let users = {}
+
+const DB_FILE = "database.json"
+
+// ===== LOAD DATABASE =====
+if (fs.existsSync(DB_FILE)) {
+  users = JSON.parse(fs.readFileSync(DB_FILE))
+}
+
+// ===== SAVE DATABASE =====
+function saveDB() {
+  fs.writeFileSync(DB_FILE, JSON.stringify(users, null, 2))
+}
+
+async function startBot() {
+  const { state, saveCreds } = await useMultiFileAuthState("session")
+  const { version } = await fetchLatestBaileysVersion()
+
+  const sock = makeWASocket({
+    version,
+    logger: pino({ level: "silent" }),
+    auth: state
+  })
+
+  sock.ev.on("creds.update", saveCreds)
+
+  // ===== WELCOME =====
+  sock.ev.on("group-participants.update", async (data) => {
+    const { id, participants, action } = data
+
+    for (let user of participants) {
+      if (action === "add") {
+        await sock.sendMessage(id, {
+          text: `👋 Welcome @${user.split("@")[0]} ke group *BloodNyx* 😈`,
+          mentions: [user]
+        })
+      }
+
+      if (action === "remove") {
+        await sock.sendMessage(id, {
+          text: `👋 @${user.split("@")[0]} keluar dari group`,
+          mentions: [user]
+        })
+      }
+    }
+  })
+
+  sock.ev.on("messages.upsert", async ({ messages }) => {
+    const msg = messages[0]
+    if (!msg.message) return
+
+    const from = msg.key.remoteJid
+    const sender = msg.key.participant || from
+    const isGroup = from.endsWith("@g.us")
+    const text = msg.message.conversation || msg.message.extendedTextMessage?.text
+
+    // ===== LEVEL SYSTEM =====
+    if (!users[sender]) users[sender] = { xp: 0, level: 1 }
+    users[sender].xp += 10
+
+    if (users[sender].xp >= 100) {
+      users[sender].level++
+      users[sender].xp = 0
+      saveDB()
+      await sock.sendMessage(from, {
+        text: `🎉 @${sender.split("@")[0]} naik ke level ${users[sender].level} 😈`,
+        mentions: [sender]
+      })
+    }
+
+    // ===== MENU =====
+    if (text === "!menu") {
+      await sock.sendMessage(from, {
+        text: `😈 *BLOODNYX BOT DEWA*
+
+📌 MAIN
+!ping
+!level
+
+🎮 FREE FIRE
+!ff
+!optes
+
+🛡️ ADMIN
+!kick @tag
+!antilink on/off
+!antitoxic on/off
+
+🎨 MEDIA
+!stiker
+!tt link
+
+🎲 FUN
+!tebak
+!quotes`
+      })
+    }
+
+    // ===== LEVEL =====
+    if (text === "!level") {
+      let u = users[sender]
+      await sock.sendMessage(from, {
+        text: `Level: ${u.level}\nXP: ${u.xp}/100`
+      })
+    }
+
+    // ===== PING =====
+    if (text === "!ping") {
+      await sock.sendMessage(from, { text: "⚡ BOT DEWA ONLINE 24 JAM" })
+    }
+
+    // ===== FF =====
+    if (text === "!ff") {
+      await sock.sendMessage(from, { text: "Auto headshot setting 😈🔥" })
+    }
+
+    // ===== ANTI LINK =====
+    if (text === "!antilink on") antiLink = true
+    if (text === "!antilink off") antiLink = false
+
+    if (isGroup && antiLink && text?.includes("chat.whatsapp.com")) {
+      await sock.sendMessage(from, { text: "🚫 Link terdeteksi!" })
+      await sock.groupParticipantsUpdate(from, [sender], "remove")
+    }
+
+    // ===== ANTI TOXIC =====
+    const toxic = ["anjing", "babi", "kontol"]
+
+    if (text === "!antitoxic on") antiToxic = true
+    if (text === "!antitoxic off") antiToxic = false
+
+    if (antiToxic && text) {
+      for (let t of toxic) {
+        if (text.toLowerCase().includes(t)) {
+          await sock.sendMessage(from, { text: "🚫 Toxic terdeteksi!" })
+          await sock.groupParticipantsUpdate(from, [sender], "remove")
+        }
+      }
+    }
+
+    // ===== KICK =====
+    if (text && text.startsWith("!kick")) {
+      if (!isGroup) return
+      let mentioned = msg.message.extendedTextMessage?.contextInfo?.mentionedJid
+
+      if (mentioned) {
+        await sock.groupParticipantsUpdate(from, mentioned, "remove")
+      }
+    }
+
+    // ===== STICKER =====
+    if (msg.message.imageMessage && text === "!stiker") {
+      const stream = await downloadContentFromMessage(msg.message.imageMessage, "image")
+      let buffer = Buffer.from([])
+
+      for await (const chunk of stream) {
+        buffer = Buffer.concat([buffer, chunk])
+      }
+
+      await sock.sendMessage(from, { sticker: buffer })
+    }
+
+    // ===== TIKTOK =====
+    if (text && text.startsWith("!tt")) {
+      const url = text.split(" ")[1]
+
+      try {
+        const res = await axios.get(`https://api.tiklydown.eu.org/api/download?url=${url}`)
+        await sock.sendMessage(from, {
+          video: { url: res.data.video.noWatermark },
+          caption: "✅ Berhasil"
+        })
+      } catch {
+        sock.sendMessage(from, { text: "❌ Error" })
+      }
+    }
+
+    // ===== GAME =====
+    if (text === "!tebak") {
+      const list = ["api", "air", "angin"]
+      const j = list[Math.floor(Math.random() * list.length)]
+      await sock.sendMessage(from, { text: `Tebak:\nA _ I\nJawaban: ${j}` })
+    }
+
+    // ===== QUOTES =====
+    if (text === "!quotes") {
+      const q = ["Jangan menyerah 🔥", "Push rank 😈", "Skill nomor 1"]
+      await sock.sendMessage(from, { text: q[Math.floor(Math.random() * q.length)] })
+    }
+
+  })
+
+  console.log("😈 BLOODNYX BOT DEWA AKTIF")
+}
+
+startBot()
